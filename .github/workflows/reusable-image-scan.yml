@@ -1,4 +1,4 @@
-name: Scan Image
+name: Scan and SBOM
 on:
   workflow_call:
     inputs:
@@ -30,10 +30,10 @@ jobs:
         image: ${{fromJson(needs.generate-matrix.outputs.matrix)}}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4
 
       - name: Maximize build space
-        uses: ublue-os/remove-unwanted-software@v6
+        uses: ublue-os/remove-unwanted-software@517622d6452028f266b7ba4cc9a123b5f58a6b53 # v7
 
       - name: Install Syft
         shell: bash
@@ -41,9 +41,15 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
           syft version
 
+      - name: Lowercase Registry
+        id: registry_case
+        uses: ASzc/change-string-case-action@d0603cd0a7dd490be678164909f65c7737470a7f # v6
+        with:
+          string: ${{ matrix.image }}
+
       - name: Generate SBOM
         env:
-          IMAGE: ${{ matrix.image }}
+          IMAGE: ${{ steps.registry_case.outputs.lowercase }}
         run: |
           syft ${IMAGE} \
             --output cyclonedx-json=sbom.json \
@@ -60,12 +66,12 @@ jobs:
       - name: Generate artifact name
         id: artifact-name
         env:
-          IMAGE: ${{ matrix.image }}
+          IMAGE: ${{ steps.registry_case.outputs.lowercase }}
         run: |
           echo "name=$(echo ${IMAGE} | awk -F'/' '{print $NF}' | sed 's/:/-/g')" >> $GITHUB_OUTPUT
 
       - name: Upload scan results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4
         with:
           name: security-${{ steps.artifact-name.outputs.name }}
           if-no-files-found: error

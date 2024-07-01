@@ -1,12 +1,14 @@
-# Welcome to Aurora!
+# Welcome to Aurora
+
 🔭  `%IMAGE_NAME%:%IMAGE_TAG%`
 Let's trace the stars.
 
 |  Command | Description |
 | ------- | ----------- |
-| `ujust --choose`  | Display available commands with search |
+| `ujust --choose`  | Show available commands  |
 | `ujust toggle-user-motd` | Toggle this banner on/off | 
-| `ujust brew` | Install Homebrew (Strongly Recommended) |
+| `ujust bluefin-cli` | Enable terminal bling | 
+| `brew help` | Manage command line packages | 
 
 %TIP%
 

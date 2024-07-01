@@ -28,18 +28,24 @@ tensorflow:
 # Setup a local Ollama instance in a container. Detect hardware, offer a choice if needed.
 ollama:
     #!/usr/bin/env bash
-    echo 'Follow the prompts and check the tutorial: '
+    echo 'Detecting Hardware...'
     echo
-    GPU_CHOICES=()
+    GPU_CHOICES=("Nvidia (CUDA)" "AMD (ROCm)" "CPU (slow)")
+    DETECTED_OPTIONS=()
     # Detect nvidia drivers
     if which nvidia-smi > /dev/null 2>&1; then
-        GPU_CHOICES+=("Nvidia (CUDA)")
+        DETECTED_OPTIONS+=("${GPU_CHOICES[0]}")
     fi
-    # Detect radeon hardware
-    if lspci | grep ' VGA ' | grep -sq Radeon; then
-        GPU_CHOICES+=("AMD (ROCm)")
+    # Detect AMD hardware
+    if lspci | grep ' VGA ' | grep -sq AMD; then
+        DETECTED_OPTIONS+=("${GPU_CHOICES[1]}")
     fi
-    GPU_SELECTION=$(printf '%s\n' "${GPU_CHOICES[@]}" | gum choose --select-if-one --header "Select the type of graphics card you have")
+    # Nothing detected, ask the user
+    if [ ${#DETECTED_OPTIONS[@]} -eq 0 ]; then
+        GPU_SELECTION=$(printf '%s\n' "${GPU_CHOICES[@]}" | gum choose --select-if-one --header "Select the type of graphics card you want to use")
+    else
+        GPU_SELECTION=$(printf '%s\n' "${DETECTED_OPTIONS[@]}" | gum choose --select-if-one --header "Select the type of graphics card you want to use")
+    fi
     echo "Selected ${GPU_SELECTION}!"
     case "$GPU_SELECTION" in
         "Nvidia (CUDA)")
@@ -53,6 +59,10 @@ ollama:
     AddDevice=/dev/dri
     AddDevice=/dev/kfd
     EOF
+            ;;
+        *)
+            IMAGE=latest
+            CUSTOM_ARGS=""
             ;;
     esac
 
@@ -75,6 +85,7 @@ ollama:
     RemapUsers=keep-id
     RunInit=yes
     NoNewPrivileges=no
+    Network=ollama.network
     Volume=%h/.ollama:/.ollama
     PodmanArgs=--userns=keep-id
     PodmanArgs=--group-add=keep-groups
@@ -86,7 +97,7 @@ ollama:
     ${CUSTOM_ARGS}
 
     [Install]
-    RequiredBy=default.target
+    RequiredBy=multi-user.target
     EOF
     if [  ! -f ~/.config/containers/systemd/ollama.container ]; then
         mkdir -p ~/.config/containers/systemd
@@ -94,6 +105,136 @@ ollama:
     else
         echo "Ollama container already exists, skipping..."
     fi
+
+    read -r -d '' QUADLET_NETWORK <<-EOF
+    [Network]
+    NetworkName=ollama
+    EOF
+    if [  ! -f ~/.config/containers/systemd/ollama.network ]; then
+        mkdir -p ~/.config/containers/systemd
+        echo "${QUADLET_NETWORK}" > ~/.config/containers/systemd/ollama.network
+    else
+        echo "Ollama network already exists, skipping..."
+    fi
+
     systemctl --user daemon-reload
-    systemctl --user start ollama.service
+    systemctl --user start ollama.service || echo "Error starting Ollama Quadlet."
     echo "Please install the ollama cli via \`brew install ollama\`"
+
+# Setup a local Ollama WebUI in a container
+ollama-web: ollama
+    #!/usr/bin/env bash
+
+    read -r -d '' QUADLET <<-EOF
+    [Unit]
+    Description=An Ollama WebUI container
+    After=network-online.target ollama.service
+    Requires=ollama.service
+
+    [Container]
+    Image=ghcr.io/open-webui/open-webui:latest
+    AutoUpdate=registry
+    ContainerName=ollama-web
+    Environment=OLLAMA_BASE_URL=http://ollama:11434
+    Environment=WEBUI_SECRET_KEY=abc123
+    Environment=DEFAULT_USER_ROLE=admin
+    Volume=open-webui:/app/backend/data
+    # Open WebUI does not allow access without a user account, nor does it allow
+    # account creation via environment variables.
+    Environment=ENABLE_SIGNUP=true
+    PublishPort=8080:8080
+    Network=ollama.network
+
+    [Service]
+    TimeoutStartSec=900
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    if [  ! -f ~/.config/containers/systemd/ollama-web.container ]; then
+        mkdir -p ~/.config/containers/systemd
+        echo "${QUADLET}" > ~/.config/containers/systemd/ollama-web.container
+    else
+        echo "Ollama WebUI container already exists, skipping..."
+    fi
+    systemctl --user daemon-reload
+    systemctl --user start ollama-web.service
+    echo "Ollama Web UI container started. You can access it at http://localhost:8080"
+
+# Setup InvokeAI in a container
+invokeai:
+    #!/usr/bin/env bash
+    echo 'Detecting Hardware...'
+    echo
+    GPU_CHOICES=("Nvidia (CUDA)" "AMD (ROCm)" "CPU (slow)")
+    DETECTED_OPTIONS=()
+    # Detect nvidia drivers
+    if which nvidia-smi > /dev/null 2>&1; then
+        DETECTED_OPTIONS+=("${GPU_CHOICES[0]}")
+    fi
+    # Detect AMD hardware
+    if lspci | grep ' VGA ' | grep -sq AMD; then
+        DETECTED_OPTIONS+=("${GPU_CHOICES[1]}")
+    fi
+    # Nothing detected, ask the user
+    if [ ${#DETECTED_OPTIONS[@]} -eq 0 ]; then
+        GPU_SELECTION=$(printf '%s\n' "${GPU_CHOICES[@]}" | gum choose --select-if-one --header "Select the type of graphics card you want to use")
+    else
+        GPU_SELECTION=$(printf '%s\n' "${DETECTED_OPTIONS[@]}" | gum choose --select-if-one --header "Select the type of graphics card you want to use")
+    fi
+    echo "Selected ${GPU_SELECTION}!"
+    case "${GPU_SELECTION}" in
+        "Nvidia (CUDA)")
+            IMAGE=latest
+            CUSTOM_ARGS="AddDevice=nvidia.com/gpu=all"
+            ;;
+        "AMD (ROCm)")
+            IMAGE=main-rocm
+            read -r -d '' CUSTOM_ARGS <<-'EOF'
+    AddDevice=/dev/dri
+    AddDevice=/dev/kfd
+    EOF
+            ;;
+        *)
+            IMAGE=latest
+            CUSTOM_ARGS=""
+            ;;
+    esac
+
+    read -r -d '' CONTAINER_QUADLET <<-EOF
+    [Unit]
+    Description=The InvokeAI container
+    After=network-online.target
+
+    [Service]
+    TimeoutStartSec=1200
+
+    [Container]
+    Image=ghcr.io/invoke-ai/invokeai:${IMAGE}
+    ContainerName=invokeai
+    AutoUpdate=registry
+    Environment=INVOKEAI_ROOT=/var/lib/invokeai
+    PublishPort=9091:9090
+    Volume=invokeai.volume:/var/lib/invokeai
+    SecurityLabelDisable=true
+    ${CUSTOM_ARGS}
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+    read -r -d '' VOLUME_QUADLET <<-EOF
+    [Volume]
+    VolumeName=invokeai
+    EOF
+
+    if [ ! -f ~/.config/containers/systemd/invokeai.container ] || [ ! -f ~/.config/containers/systemd/invokeai.volume ]; then
+        mkdir -p ~/.config/containers/systemd
+        echo "${CONTAINER_QUADLET}" > ~/.config/containers/systemd/invokeai.container
+        echo "${VOLUME_QUADLET}" > ~/.config/containers/systemd/invokeai.volume
+    else
+        echo "InvokeAI container already exists, skipping..."
+    fi
+    systemctl --user daemon-reload
+    systemctl --user start invokeai.service
+    echo "InvokeAI container started. You can access it at http://localhost:9091"
